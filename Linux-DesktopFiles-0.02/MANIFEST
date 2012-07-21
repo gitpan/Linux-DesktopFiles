@@ -1,0 +1,6 @@
+MANIFEST
+README
+Build.PL
+Changes
+t/Linux-DesktopFiles.t
+lib/Linux/DesktopFiles.pm
