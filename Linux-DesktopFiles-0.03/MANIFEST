@@ -2,5 +2,6 @@ MANIFEST
 README
 Build.PL
 Changes
+t/file.desktop
 t/Linux-DesktopFiles.t
 lib/Linux/DesktopFiles.pm
