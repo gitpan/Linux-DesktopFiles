@@ -4,6 +4,7 @@
 Encoding=UTF-8
 Name=The right name
 GenericName=Also this name is right
+Comment=This is a test!
 Comment[ro]=Acesta este un test!
 Type=Application
 Categories=GTK;Utility;Archiving;Compression;

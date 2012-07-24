@@ -7,7 +7,7 @@ use 5.010;
 use strict;
 use warnings;
 
-use Test::More tests => 9;
+use Test::More tests => 10;
 BEGIN { use_ok('Linux::DesktopFiles') }
 
 #########################
@@ -16,7 +16,7 @@ BEGIN { use_ok('Linux::DesktopFiles') }
 # its man page ( perldoc Test::More ) for help writing this test script.
 
 my $obj = Linux::DesktopFiles->new(
-                                   keys_to_keep              => [qw(Name GenericName Comment[ro] Terminal Icon Exec)],
+                                   keys_to_keep              => [qw(Name GenericName Comment Comment[ro] Terminal Icon Exec)],
                                    categories                => [qw(Utility Archiving)],
                                    categories_case_sensitive => 0,
                                   );
@@ -27,6 +27,7 @@ my $hash_ref = $obj->parse_desktop_file(-f $t_file ? $t_file : -f $0 ? 'file.des
 ok($hash_ref->{Name}          eq "The right name",          "Name");
 ok($hash_ref->{GenericName}   eq "Also this name is right", "GenericName");
 ok($hash_ref->{Exec}          eq "some_command -z -9",      "Exec");
+ok($hash_ref->{Comment}       eq "This is a test!",         "Comment");
 ok($hash_ref->{'Comment[ro]'} eq "Acesta este un test!",    "Comment[ro]");
 ok($hash_ref->{Terminal}      eq "true",                    "Terminal");
 ok($hash_ref->{Icon}          eq "icon_name",               "Icon");

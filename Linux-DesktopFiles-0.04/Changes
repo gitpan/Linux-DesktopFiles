@@ -1,5 +1,8 @@
 Revision history for Perl extension Linux::DesktopFiles.
 
+0.04  Tue Jul 24 21:30:14 2012
+    - Fixed the issue when requesting comments in multiple languages (ex: Comments, Comments[fr], etc...);
+
 0.03  Tue Jul 24 13:37:14 2012
     - Skip desktop files if the "Hidden" value is set to true.
     - Keep any specified keys as ->new(keys_to_keep => [...]) (previously: only alphanumeric keys)

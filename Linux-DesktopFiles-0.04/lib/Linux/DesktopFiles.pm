@@ -68,10 +68,11 @@ sub new {
     $self->{file_keys_re} = do {
         my @keys = map quotemeta, do {
             my %seen;
-            grep !$seen{$_}++, @{$self->{keys_to_keep}}, qw(Hidden NoDisplay Terminal Categories);
+            grep !$seen{$_}++, @{$self->{keys_to_keep}}, qw(Hidden NoDisplay Categories),
+              $self->{terminalize} ? qw(Terminal) : ();
         };
         local $" = q{|};
-        qr/(?>@keys)/;
+        qr/@keys/;
     };
 
     $self->{categories} =
@@ -80,12 +81,12 @@ sub new {
       :                             $default_categories;
 
     $self->{true_value} =
-        ref $opts{true_value} eq 'ARRAY' ? map { $_ => 1 } @{delete($opts{true_value})}
-      : defined $opts{true_value} ? {delete($opts{true_value}) => undef}
+        ref $opts{true_value} eq 'ARRAY' ? {map { $_ => 1 } @{delete($opts{true_value})}}
+      : defined $opts{true_value} ? {delete($opts{true_value}) => 1}
       : {
-         'true' => 1,
-         'True' => 1,
-         '1'    => 1
+         true => 1,
+         True => 1,
+         1    => 1
         };
 
     # Normalize categories
