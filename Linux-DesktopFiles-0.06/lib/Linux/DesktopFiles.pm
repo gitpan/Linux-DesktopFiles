@@ -8,7 +8,7 @@ package Linux::DesktopFiles;
 #use strict;
 #use warnings;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 sub new {
     my ($class, %opts) = @_;
@@ -317,7 +317,7 @@ sub _store_info {
 
 sub _clean_categories {
     my ($self) = @_;
-    undef @{$self->{categories}}{keys %{$self->{categories}}};
+    @{$self->{categories}}{keys %{$self->{categories}}} = ();
 }
 
 sub get_categories {

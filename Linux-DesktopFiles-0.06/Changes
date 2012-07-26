@@ -1,5 +1,8 @@
 Revision history for Perl extension Linux::DesktopFiles.
 
+0.01  Thu Jul 26 15:16:06 2012
+	- Fixed a critical (_clean_categories) bug.
+
 0.05  Thu Jul 26 13:56:41 2012
     - Updated the documentation.
     - No more unexpected dies.
