@@ -1,5 +1,9 @@
 Revision history for Perl extension Linux::DesktopFiles.
 
+0.05  Thu Jul 26 13:56:41 2012
+    - Updated the documentation.
+    - No more unexpected dies.
+
 0.04  Tue Jul 24 21:30:14 2012
     - Fixed the issue when requesting comments in multiple languages (ex: Comments, Comments[fr], etc...);
 

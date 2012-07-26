@@ -8,13 +8,9 @@ package Linux::DesktopFiles;
 #use strict;
 #use warnings;
 
-our $VERSION = '0.03';
+our $VERSION = '0.05';
 
 sub new {
-
-    die "Options to Linux::DesktopFiles should be key/value pairs, not hash reference"
-      if ref $_[1] eq 'HASH';
-
     my ($class, %opts) = @_;
 
     my $self = bless {}, $class;
@@ -102,7 +98,7 @@ sub new {
     $self->{terminal} = delete($opts{terminal}) || $ENV{TERM};
 
     if (defined $self->{icon_db_filename} and $self->{with_icons} and $self->{full_icon_paths}) {
-        $self->init_icon_database() || die "Can't open/create database '$self->{icon_db_filename}': $!";
+        $self->init_icon_database() || warn "Can't open/create database '$self->{icon_db_filename}': $!";
     }
 
     foreach my $key (keys %opts) {
@@ -114,7 +110,6 @@ sub new {
 
 sub iterate_desktop_files {
     my ($self, $code) = @_;
-    die q{usage: $self->iterate_desktop_files(\&my_sub)} if ref $code ne 'CODE';
 
     foreach my $dir (@{$self->{desktop_files_paths}}) {
         opendir(my $dir_h, $dir) or next;
@@ -322,7 +317,7 @@ sub _store_info {
 
 sub _clean_categories {
     my ($self) = @_;
-    @{$self->{categories}}{keys %{$self->{categories}}} = ();
+    undef @{$self->{categories}}{keys %{$self->{categories}}};
 }
 
 sub get_categories {
@@ -488,7 +483,9 @@ This values are used to test for I<true> some values from the .desktop files.
 
 =item with_icons => 1
 
-Require icons
+Require icons. Unless I<full_icon_paths> is set to a true value, this
+option will return icon names without the extension. If an B<Icon> value
+is an absolute path to an icon in the system, it will be returned as it is.
 
 =item full_icon_paths => 1
 
