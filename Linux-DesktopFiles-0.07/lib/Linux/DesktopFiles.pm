@@ -8,7 +8,7 @@ package Linux::DesktopFiles;
 #use strict;
 #use warnings;
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 sub new {
     my ($class, %opts) = @_;
@@ -34,14 +34,15 @@ sub new {
       icon_dirs_last
       use_only_my_icon_dirs
       terminalize
+      use_current_theme_icons
       );
 
     @{$self}{@default_arguments} = delete @opts{@default_arguments};
 
     $self->{desktop_files_paths} =
         ref $opts{desktop_files_paths} eq 'ARRAY' ? delete($opts{desktop_files_paths})
-      : defined($opts{desktop_files_paths}) ? [delete($opts{desktop_files_paths})]
-      :                                       [qw(/usr/share/applications)];
+      : defined($opts{desktop_files_paths})       ? [delete($opts{desktop_files_paths})]
+      :                                             [qw(/usr/share/applications)];
 
     my $default_categories = {
                               utility     => undef,
@@ -58,8 +59,8 @@ sub new {
 
     $self->{keys_to_keep} =
         ref $opts{keys_to_keep} eq 'ARRAY' ? delete($opts{keys_to_keep})
-      : defined($opts{keys_to_keep}) ? [delete($opts{keys_to_keep})]
-      :                                [qw(Exec Name), $self->{with_icons} ? qw(Icon) : ()];
+      : defined($opts{keys_to_keep})       ? [delete($opts{keys_to_keep})]
+      : [qw(Exec Name), $self->{with_icons} ? qw(Icon) : ()];
 
     $self->{file_keys_re} = do {
         my @keys = map quotemeta, do {
@@ -163,7 +164,7 @@ sub get_icon_path {
     if (not defined $icon) {
 
         if (not defined $self->{icon_theme}) {
-            $self->get_icon_theme_name() if not $self->{use_only_my_icon_dirs};
+            $self->get_icon_theme_name() if (!$self->{use_only_my_icon_dirs} || $self->{use_current_theme_icons});
         }
 
         my @icon_dirs;
@@ -172,13 +173,36 @@ sub get_icon_path {
             push @icon_dirs, grep -d, @{$self->{icon_dirs_first}};
         }
 
-        if (length $self->{icon_theme} and not $self->{use_only_my_icon_dirs}) {
-            foreach my $icon_dir (
-                                  "/usr/share/icons/$self->{icon_theme}/",
-                                  "$self->{home_dir}/.icons/$self->{icon_theme}/",
-                                  "$self->{home_dir}/.local/share/icons/$self->{icon_theme}/"
-              ) {
-                push @icon_dirs, $icon_dir if -d $icon_dir;
+        if (length $self->{icon_theme} and (!$self->{use_only_my_icon_dirs} || $self->{use_current_theme_icons})) {
+            my @icon_theme_dirs = (
+                                   "/usr/share/icons/$self->{icon_theme}",
+                                   "$self->{home_dir}/.icons/$self->{icon_theme}",
+                                   "$self->{home_dir}/.local/share/icons/$self->{icon_theme}"
+                                  );
+
+            while (@icon_theme_dirs) {
+                my $icon_dir = shift @icon_theme_dirs;
+
+                if (-d $icon_dir) {
+                    push @icon_dirs, $icon_dir if -d $icon_dir;
+                    if (-e (my $index_theme = "$icon_dir/index.theme")) {
+
+                        local $/ = "";
+                        open my $fh, '<', $index_theme or next;
+
+                        while (defined(my $para = <$fh>)) {
+                            if ($para =~ /^\[Icon Theme\]/) {
+                                if ($para =~ /^Inherits=(\S+)/m) {
+                                    my $base = substr($icon_dir, 0, rindex($icon_dir, '/'));
+                                    push @icon_theme_dirs, map { "$base/$_" } split(/,/, $1);
+                                }
+                                last;
+                            }
+                        }
+
+                        close $fh;
+                    }
+                }
             }
         }
 
@@ -189,8 +213,8 @@ sub get_icon_path {
 
         if (not $self->{use_only_my_icon_dirs}) {
             push @icon_dirs, grep -d,
-              '/usr/share/pixmaps/',                   '/usr/share/icons/hicolor/',
-              "$self->{home_dir}/.local/share/icons/", "$self->{home_dir}/.icons/";
+              '/usr/share/pixmaps',                   '/usr/share/icons/hicolor',
+              "$self->{home_dir}/.local/share/icons", "$self->{home_dir}/.icons";
         }
 
         if (defined $self->{icon_dirs_last}
@@ -198,19 +222,26 @@ sub get_icon_path {
             push @icon_dirs, grep -d, @{$self->{icon_dirs_last}};
         }
 
-        s{^.+\K/$}{} for @icon_dirs;    # remove the very last slash
+        if (
+            (
+             my @uniq_dirs = (
+                              do { my %seen; grep !$seen{$_}++ => @icon_dirs }
+                             )
+            )
+          ) {
+            require File::Find;
+            File::Find::find(
+                {
+                 wanted => sub {
+                     return if substr($File::Find::name, -4, 1) ne q{.};
+                     return if substr($_, -4, 4, q{}) eq '.svg' and $self->{skip_svg_icons};
+                     return if exists $self->{icons_db}{$_};
+                     $self->{icons_db}{$_} = $File::Find::name;
+                 },
+                } => @uniq_dirs
+            );
+        }
 
-        require File::Find;
-        File::Find::find(
-            {
-             wanted => sub {
-                 return if substr($File::Find::name, -4, 1) ne q{.};
-                 return if substr($_, -4, 4, q{}) eq '.svg' and $self->{skip_svg_icons};
-                 return if exists $self->{icons_db}{$_};
-                 $self->{icons_db}{$_} = $File::Find::name;
-             },
-            } => do { my %seen; grep !$seen{$_}++ => @icon_dirs }
-        );
     }
 
     unless (defined $icon) {
@@ -391,6 +422,7 @@ The following options correspond to attribute methods described below:
    categories_case_sensitive   0
    keep_empty_categories       0
    use_only_my_icon_dirs       0
+   use_current_theme_icons     0/1
    terminalize                 0
    terminal                    $ENV{TERM}
    home_dir                    $ENV{HOME}
@@ -521,6 +553,14 @@ I</usr/share/icons/hicolor> and some other directories.
 Be very strict and use only the directories specified by you in either
 one of I<icon_dirs_first>, I<icon_dirs_second> and/or I<icon_dirs_last>
 
+=item use_current_theme_icons => 1
+
+Use your current theme icons (from ~/.gtkrc-2.0), even when I<use_only_my_icon_dirs>
+is set to a true value. This option is useful when you want to get only the icons
+from the current theme. It is usually used in combination with I<use_only_my_icon_dirs>.
+When I<use_only_my_icon_dirs> is set a false value, this option is true by default.
+When I<use_only_my_icon_dirs> is set a true value, this option is false by default.
+
 =back
 
 =head2 Regex options
@@ -600,11 +640,11 @@ The returned HASH reference might look something like this:
 
 =head1 AUTHOR
 
-Trizen, E<lt>trizenx@gmail.comE<gt>
+Suteu "Trizen" Daniel, E<lt>trizenx@gmail.comE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2012 by Trizen
+Copyright (C) 2012-2013
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.14.2 or,
