@@ -2,65 +2,53 @@ package Linux::DesktopFiles;
 
 # This module is designed to be pretty fast.
 # The best uses of this module is to generate real
-# time menus, based on the content of .desktop files.
+# time menus, based on the content of desktop files.
 
-#use 5.010;
+#use 5.014;
 #use strict;
 #use warnings;
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 sub new {
     my ($class, %opts) = @_;
 
     my $self = bless {}, $class;
 
-    $self->{home_dir} = delete($opts{home_dir}) || $ENV{HOME} || $ENV{LOGDIR};
-
     my @default_arguments = qw(
-      full_icon_paths
+      abs_icon_paths
       icon_db_filename
-      with_icons
       keep_empty_categories
-      categories_case_sensitive
-      skip_file_name_re
-      skip_app_name_re
-      skip_app_command_re
-      skip_file_content_re
-      clean_command_name_re
+      keep_unknown_categories
+      unknown_category_key
+      case_insensitive_cats
+      skip_filename_re
       skip_svg_icons
       icon_dirs_first
       icon_dirs_second
       icon_dirs_last
-      use_only_my_icon_dirs
+      strict_icon_dirs
       terminalize
       use_current_theme_icons
+      terminal
+      gtk_rc_filename
+      home_dir
+      terminalization_format
+      skip_entry
+      substitutions
       );
 
     @{$self}{@default_arguments} = delete @opts{@default_arguments};
 
     $self->{desktop_files_paths} =
-        ref $opts{desktop_files_paths} eq 'ARRAY' ? delete($opts{desktop_files_paths})
-      : defined($opts{desktop_files_paths})       ? [delete($opts{desktop_files_paths})]
-      :                                             [qw(/usr/share/applications)];
-
-    my $default_categories = {
-                              utility     => undef,
-                              development => undef,
-                              education   => undef,
-                              game        => undef,
-                              graphics    => undef,
-                              audiovideo  => undef,
-                              network     => undef,
-                              office      => undef,
-                              settings    => undef,
-                              system      => undef,
-                             };
+      ref $opts{desktop_files_paths} eq 'ARRAY'
+      ? delete($opts{desktop_files_paths})
+      : [qw(/usr/share/applications)];
 
     $self->{keys_to_keep} =
-        ref $opts{keys_to_keep} eq 'ARRAY' ? delete($opts{keys_to_keep})
-      : defined($opts{keys_to_keep})       ? [delete($opts{keys_to_keep})]
-      : [qw(Exec Name), $self->{with_icons} ? qw(Icon) : ()];
+      ref $opts{keys_to_keep} eq 'ARRAY'
+      ? delete($opts{keys_to_keep})
+      : [qw(Exec Name Icon)];
 
     $self->{file_keys_re} = do {
         my @keys = map quotemeta, do {
@@ -72,38 +60,44 @@ sub new {
         qr/@keys/;
     };
 
-    $self->{categories} =
-        ref $opts{categories} eq 'ARRAY' ? {map { $_ => undef } @{delete($opts{categories})}}
-      : defined $opts{categories} ? {delete($opts{categories}) => 1}
-      :                             $default_categories;
+    $self->{categories} = {
+        map { ($self->{case_insensitive_cats} ? (lc $_) =~ tr/_a-z0-9/_/cr : $_) => undef }
+          ref $opts{categories} eq 'ARRAY'
+        ? @{delete($opts{categories})}
+        : qw(
+          Utility
+          Development
+          Education
+          Game
+          Graphics
+          AudioVideo
+          Network
+          Office
+          Settings
+          System
+          )
+    };
 
-    $self->{true_value} =
-        ref $opts{true_value} eq 'ARRAY' ? {map { $_ => 1 } @{delete($opts{true_value})}}
-      : defined $opts{true_value} ? {delete($opts{true_value}) => 1}
+    $self->{true_values} =
+      ref $opts{true_value} eq 'ARRAY'
+      ? {map { $_ => 1 } @{delete($opts{true_value})}}
       : {
-         true => 1,
-         True => 1,
-         1    => 1
+         'true' => 1,
+         'True' => 1,
+         '1'    => 1
         };
 
-    # Normalize categories
-    if (not $self->{categories_case_sensitive}) {
-        foreach my $key (keys %{$self->{categories}}) {
-            my $category = lc $key;
-            $category =~ tr/_a-z/_/c;
-            $self->{categories}{$category} = delete($self->{categories}{$key});
-        }
-    }
+    $self->{home_dir} //= $ENV{HOME} || $ENV{LOGDIR};
+    $self->{gtk_rc_filename}        //= "$self->{home_dir}/.gtkrc-2.0";
+    $self->{terminal}               //= $ENV{TERM};
+    $self->{terminalization_format} //= q{%s -e '%s'};
 
-    $self->{gtk_rc_filename} = delete($opts{gtk_rc_filename}) // "$self->{home_dir}/.gtkrc-2.0";
-    $self->{terminal} = delete($opts{terminal}) || $ENV{TERM};
-
-    if (defined $self->{icon_db_filename} and $self->{with_icons} and $self->{full_icon_paths}) {
-        $self->init_icon_database() || warn "Can't open/create database '$self->{icon_db_filename}': $!";
+    if (defined $self->{icon_db_filename} and $self->{abs_icon_paths}) {
+        $self->_init_icon_database() || warn "Can't open/create database '$self->{icon_db_filename}': $!";
     }
 
     foreach my $key (keys %opts) {
-        warn "$0: Invalid option: $key\n";
+        warn "Invalid option or value: $key";
     }
 
     return $self;
@@ -132,28 +126,26 @@ sub get_icon_theme_name {
 
     if (-r $self->{gtk_rc_filename}) {
         if (sysopen my $fh, $self->{gtk_rc_filename}, 0) {
-            my $content;
-            sysread $fh, $content, -s _;
-            if ($content =~ /^\s*gtk-icon-theme-name\s*=\s*["']?([^'"\r\n]+)/im) {
-                $self->{icon_theme} = $1;
-            }
-            close $fh;
+            sysread $fh, (my $content), -s _;
+            $content =~ /^\s*gtk-icon-theme-name\s*=\s*["']?([^'"\r\n]+)/im
+              && return $1;
         }
     }
-    $self->{icon_theme} //= '';
+
+    return;
 }
 
 sub get_icon_path {
     my ($self, $icon_name) = @_;
 
     if (defined($icon_name) and $icon_name ne q{}) {
+
         if (chr ord $icon_name eq '/') {
-            return $icon_name if -f $icon_name;
+            return -f $icon_name ? $icon_name : q{};
         }
-        else {
-            $icon_name =~ s/\.\w{3}$//;
-            return $icon_name unless $self->{full_icon_paths};
-        }
+
+        $icon_name =~ s/\.\w{3}$//;
+        $self->{abs_icon_paths} || return $icon_name;
     }
     else {
         return q{};
@@ -161,11 +153,12 @@ sub get_icon_path {
 
     my $icon = $self->{icons_db}{$icon_name};
 
-    if (not defined $icon) {
+    if (not defined $icon and not $self->{_stored_icons}++) {
 
-        if (not defined $self->{icon_theme}) {
-            $self->get_icon_theme_name() if (!$self->{use_only_my_icon_dirs} || $self->{use_current_theme_icons});
-        }
+        my $icon_theme =
+          (!$self->{strict_icon_dirs} || $self->{use_current_theme_icons})
+          ? $self->get_icon_theme_name()
+          : undef;
 
         my @icon_dirs;
         if (defined $self->{icon_dirs_first}
@@ -173,11 +166,11 @@ sub get_icon_path {
             push @icon_dirs, grep -d, @{$self->{icon_dirs_first}};
         }
 
-        if (length $self->{icon_theme} and (!$self->{use_only_my_icon_dirs} || $self->{use_current_theme_icons})) {
+        if (defined($icon_theme) and (!$self->{strict_icon_dirs} || $self->{use_current_theme_icons})) {
             my @icon_theme_dirs = (
-                                   "/usr/share/icons/$self->{icon_theme}",
-                                   "$self->{home_dir}/.icons/$self->{icon_theme}",
-                                   "$self->{home_dir}/.local/share/icons/$self->{icon_theme}"
+                                   "/usr/share/icons/$icon_theme",
+                                   "$self->{home_dir}/.icons/$icon_theme",
+                                   "$self->{home_dir}/.local/share/icons/$icon_theme"
                                   );
 
             while (@icon_theme_dirs) {
@@ -211,7 +204,7 @@ sub get_icon_path {
             push @icon_dirs, grep -d, @{$self->{icon_dirs_second}};
         }
 
-        if (not $self->{use_only_my_icon_dirs}) {
+        if (not $self->{strict_icon_dirs}) {
             push @icon_dirs, grep -d,
               '/usr/share/pixmaps',                   '/usr/share/icons/hicolor',
               "$self->{home_dir}/.local/share/icons", "$self->{home_dir}/.icons";
@@ -261,8 +254,10 @@ sub parse_desktop_file {
     $self->_clean_categories();
     $self->_store_info(-f $file ? $file : return);
 
-    foreach my $value (values %{$self->{categories}}) {
-        return $value->[0] if ref $value eq 'ARRAY';
+    foreach my $item (values %{$self->{categories}}) {
+        if (ref $item eq 'ARRAY') {
+            return $item->[0];
+        }
     }
 
     return;
@@ -273,77 +268,86 @@ sub _store_info {
 
     foreach my $desktop_file (@_) {
 
-        if (defined $self->{skip_file_name_re}) {
-            next if substr($desktop_file, rindex($desktop_file, '/') + 1) =~ /$self->{skip_file_name_re}/o;
+        if (defined $self->{skip_filename_re}) {
+            substr($desktop_file, rindex($desktop_file, '/') + 1) =~ /$self->{skip_filename_re}/o && next;
         }
 
-        my $file;
         sysopen my $desktop_fh, $desktop_file, 0 or next;
-        sysread $desktop_fh, $file, -s $desktop_file;
+        sysread $desktop_fh, (my $file), -s $desktop_file;
 
         if ((my $index = index($file, "]\n", index($file, "[Desktop Entry]") + 15)) != -1) {
             $file = substr($file, 0, $index);
         }
 
-        my %info = $file =~ m{^($self->{file_keys_re})=(.*\S)\s*$}gm;
+        my %info = $file =~ m{^($self->{file_keys_re})=(.*\S)}gmo;
 
-        if (defined $info{NoDisplay}) {
-            next if exists $self->{true_value}{$info{NoDisplay}};
+        if (exists $info{NoDisplay}) {
+            next if exists $self->{true_values}{$info{NoDisplay}};
         }
 
-        if (defined $info{Hidden}) {
-            next if exists $self->{true_value}{$info{Hidden}};
+        if (exists $info{Hidden}) {
+            next if exists $self->{true_values}{$info{Hidden}};
         }
 
-        my @categories = split(/;/, $info{Categories} // next);
+        (
+         my @categories =
+           grep { exists $self->{categories}{$_} }
+           $self->{case_insensitive_cats}
+         ? (map { lc($_) =~ tr/_a-z0-9/_/cr } split(/;/, $info{Categories} // ''))
+         : (split(/;/, $info{Categories} // ''))
+        )
+          || (!$self->{keep_unknown_categories} && next);
 
-        my $found_cat = 0;
-        foreach my $category (@categories) {
-            if (not $self->{categories_case_sensitive}) {
-                $category = lc $category;
-                $category =~ tr/_a-z/_/c;
+        if (defined $self->{skip_entry} and ref $self->{skip_entry} eq 'ARRAY') {
+            my $skip;
+
+            foreach my $pair_ref (@{$self->{skip_entry}}) {
+                if (exists $info{$pair_ref->{key}} and $info{$pair_ref->{key}} =~ /$pair_ref->{re}/) {
+                    $skip = 1;
+                    last;
+                }
             }
-            elsif ($found_cat) {
-                last;
+
+            $skip && next;
+        }
+
+        if (defined $self->{substitutions} and ref $self->{substitutions} eq 'ARRAY') {
+
+            foreach my $pair_ref (@{$self->{substitutions}}) {
+                if (exists $info{$pair_ref->{key}}) {
+                    if ($pair_ref->{global}) {
+                        $info{$pair_ref->{key}} =~ s/$pair_ref->{re}/$pair_ref->{value}/g;
+                    }
+                    else {
+                        $info{$pair_ref->{key}} =~ s/$pair_ref->{re}/$pair_ref->{value}/;
+                    }
+                }
             }
-            ++$found_cat if not $found_cat and exists $self->{categories}{$category};
-        }
-        next if not $found_cat;
 
-        if (defined $self->{skip_file_content_re}) {
-            next if $file =~ /$self->{skip_file_content_re}/o;
         }
 
-        if (defined $self->{clean_command_name_re}) {
-            $info{Exec} =~ s/$self->{clean_command_name_re}//go;
-        }
-
-        if (defined $self->{skip_app_command_re}) {
-            next if $info{Exec} =~ /$self->{skip_app_command_re}/o;
-        }
-
-        $info{Exec} =~ s/ +%.*//s if index($info{Exec}, q{ %}) != -1;
-
-        if (defined $self->{skip_app_name_re}) {
-            next if $info{Name} =~ /$self->{skip_app_name_re}/o;
-        }
+        index($info{Exec}, ' %') != -1 && $info{Exec} =~ s/ +%.*//os;
 
         if (    $self->{terminalize}
             and defined $info{Terminal}
-            and exists $self->{true_value}{$info{Terminal}}) {
-            $info{Exec} = qq[$self->{terminal} -e '$info{Exec}'];
+            and exists $self->{true_values}{$info{Terminal}}) {
+            $info{Exec} = sprintf($self->{terminalization_format}, $self->{terminal}, $info{Exec});
         }
 
-        if ($self->{with_icons}) {
+        if (exists $info{Icon}) {
             $info{Icon} = $self->get_icon_path($info{Icon});
         }
 
-        foreach my $category (@categories) {
-            next unless exists $self->{categories}{$category};
-            push @{$self->{categories}{$category}}, {map { $_ => $info{$_} } @{$self->{keys_to_keep}}};
+        if (scalar(@categories)) {
+            foreach my $category (@categories) {
+                push @{$self->{categories}{$category}}, {map { $_ => $info{$_} } @{$self->{keys_to_keep}}};
+            }
+        }
+        elsif ($self->{keep_unknown_categories}) {
+            push @{$self->{categories}{$self->{unknown_category_key}}},
+              {map { $_ => $info{$_} } @{$self->{keys_to_keep}}};
         }
     }
-    1;
 }
 
 sub _clean_categories {
@@ -351,15 +355,16 @@ sub _clean_categories {
     @{$self->{categories}}{keys %{$self->{categories}}} = ();
 }
 
-sub get_categories {
+sub _categories {
     my ($self) = @_;
 
-    return $self->{keep_empty_categories}
-      ? {%{$self->{categories}}}
-      : {
-         map { $_ => $self->{categories}{$_} }
-         grep ref $self->{categories}{$_} eq 'ARRAY', keys %{$self->{categories}}
-        };
+    $self->{keep_empty_categories} || do {
+        foreach my $key (keys %{$self->{categories}}) {
+            defined($self->{categories}{$key}) || delete $self->{categories}{$key};
+        }
+    };
+
+    $self->{categories};
 }
 
 sub parse_desktop_files {
@@ -367,15 +372,14 @@ sub parse_desktop_files {
 
     $self->_clean_categories();
     $self->iterate_desktop_files(\&_store_info);
-    return $self->get_categories();
+    $self->_categories();
 }
 
-sub init_icon_database {
+sub _init_icon_database {
     my ($self) = @_;
 
     require GDBM_File;
-    GDBM_File->import;
-    tie %{$self->{icons_db}}, 'GDBM_File', $self->{icon_db_filename}, &GDBM_WRCREAT, 0640;
+    tie %{$self->{icons_db}}, 'GDBM_File', $self->{icon_db_filename}, &GDBM_File::GDBM_WRCREAT, 0640;
 }
 
 1;
@@ -384,7 +388,7 @@ __END__
 
 =head1 NAME
 
-Linux::DesktopFiles - Get and parse the Linux .desktop files.
+Linux::DesktopFiles - Get and parse the Linux desktop files.
 
 =head1 SYNOPSIS
 
@@ -395,7 +399,7 @@ Linux::DesktopFiles - Get and parse the Linux .desktop files.
 
 =head1 DESCRIPTION
 
-The C<Linux::DesktopFiles> is a very simple module to parse .desktop files.
+The C<Linux::DesktopFiles>, a very fast an simple way to parse the Linux desktop files.
 
 =head1 CONSTRUCTOR METHODS
 
@@ -411,43 +415,39 @@ The following options correspond to attribute methods described below:
 
    KEY                         DEFAULT
    -----------                 --------------------
-   with_icons                  0
-   full_icon_paths             0
+   abs_icon_paths              0
    skip_svg_icons              0
    icon_db_filename            undef
    icon_dirs_first             undef
    icon_dirs_second            undef
    icon_dirs_last              undef
 
-   categories_case_sensitive   0
+   case_insensitive_cats       0
    keep_empty_categories       0
-   use_only_my_icon_dirs       0
+   strict_icon_dirs            0
    use_current_theme_icons     0/1
    terminalize                 0
    terminal                    $ENV{TERM}
-   home_dir                    $ENV{HOME}
+   home_dir                    $ENV{HOME} || $ENV{LOGDIR}
    gtk_rc_filename             "~/.gtkrc-2.0"
-   true_value                  ['true', 'True', '1']
+   true_values                 ['true', 'True', '1']
 
-   skip_file_name_re           undef
-   skip_app_name_re            undef
-   skip_app_command_re         undef
-   skip_file_content_re        undef
-   clean_command_name_re       undef
+   skip_entry                 undef
+   skip_filename_re           undef
+   substitutions              undef
 
    desktop_files_paths         ['/usr/share/applications']
-   keys_to_keep                ["Name", "Exec"]
-   categories                  [qw( utility
-                                    development
-                                    education
-                                    game
-                                    graphics
-                                    audiovideo
-                                    network
-                                    office
-                                    settings
-                                    system )
-                               ]
+   keys_to_keep                ["Name", "Exec", "Icon"]
+   categories                  [qw( Utility
+                                    Development
+                                    Education
+                                    Game
+                                    Graphics
+                                    AudioVideo
+                                    Network
+                                    Office
+                                    Settings
+                                    System )]
 
 =back
 
@@ -457,16 +457,16 @@ The following options correspond to attribute methods described below:
 
 =item desktop_files_paths => ['dir1', 'dir2', ...]
 
-Set directories where to find the .desktop files (default: /usr/share/applications)
+Set directories where to find the desktop files (default: /usr/share/applications)
 
-=item keys_to_keep => [qw(Icon Exec Name Comment ...)]
+=item keys_to_keep => [qw(Name Exec Icon Comment ...)]
 
-Any of the valid keys from .desktop files. This keys will be stored in the retured
+Any of the valid keys from desktop files. This keys will be stored in the retured
 hash reference when calling C<$obj-E<gt>parse_desktop_files>.
 
 =item categories => [qw(Graphics Network AudioVideo ...)]
 
-Any of the valid categories from the .desktop files. Any category not listed,
+Any of the valid categories from the desktop files. Any category not listed,
 will be ignored.
 
 =back
@@ -480,10 +480,21 @@ will be ignored.
 If a category is empty, keep it in the returned hash reference when
 I<parse_desktop_files> is called.
 
-=item categories_case_sensitive => 1
+=item keep_unknown_categories => 1
 
-Make categories case sensitive. By default, they are case insensitive
-in a way that "X-XFCE4" is equivalent to "x_xfce4".
+When an item is not part of any specified category, put it into an
+unknown category, specified by I<unknown_category_key>.
+
+=item unknown_category_key => 'key_name'
+
+Category name where to store the applications which doesn't belong to
+any specified category.
+
+=item case_insensitive_cats => 1
+
+This option makes the categories case insensitive, by lowercasing and replacing
+any non-alpha numeric characters with an underscore. For example, "X-XFCE" will
+be equivalent with "x_xfce".
 
 =item terminalize => 1
 
@@ -494,6 +505,11 @@ I<terminal -e 'command'>
 
 This terminal will be used when I<terminalize> is set to a true value.
 
+=item terminalization_format => q{%s -e '%s'}
+
+Format used by C<sprintf> to terminalize a command which requires to run
+in a new terminal.
+
 =item home_dir => "/home/dir"
 
 Set the home directory. This value is used to locate icons in the ~/.local/share/icons.
@@ -503,9 +519,9 @@ Set the home directory. This value is used to locate icons in the ~/.local/share
 This file is used to get the icon theme name from it. (default: ~/.gtkrc-2.0)
 I<NOTE:> It works with Gtk3 as well.
 
-=item true_value => [qw(1 true True)]
+=item true_values => [qw(1 true True)]
 
-This values are used to test for I<true> some values from the .desktop files.
+This values are used to test  for trueness some values from the desktop files.
 
 =back
 
@@ -513,13 +529,7 @@ This values are used to test for I<true> some values from the .desktop files.
 
 =over 4
 
-=item with_icons => 1
-
-Require icons. Unless I<full_icon_paths> is set to a true value, this
-option will return icon names without the extension. If an B<Icon> value
-is an absolute path to an icon in the system, it will be returned as it is.
-
-=item full_icon_paths => 1
+=item abs_icon_paths => 1
 
 Full icon paths for B<Icon> values.
 
@@ -527,16 +537,16 @@ Full icon paths for B<Icon> values.
 
 GDBM database name used to store icon names as keys and icon paths as
 values for a faster lookup (used with GDBM_File).
-I<NOTE:> Works in combination with B<full_icon_paths> and B<with_icons>
+I<NOTE:> Works in combination with B<abs_icon_paths>
 
 =item skip_svg_icons => 1
 
-Ignore .svg icons when looking for full icon paths.
+Ignore SVG icons when looking for absolute icon paths.
 
 =item icon_dirs_first => [dir1, dir2, ...]
 
-When looking for full icon paths, look in this directories first, before
-looking in the directories of the current icon theme.
+When looking for absolute icon paths, look in this directories first,
+before looking in the directories of the current icon theme.
 
 =item icon_dirs_second => [dir1, dir2, ...]
 
@@ -548,18 +558,18 @@ icon theme. (Before I</usr/share/pixmaps>)
 Look in this directories at the very last, after looked in I</usr/share/pixmaps>,
 I</usr/share/icons/hicolor> and some other directories.
 
-=item use_only_my_icon_dirs => 1
+=item strict_icon_dirs => 1
 
 Be very strict and use only the directories specified by you in either
-one of I<icon_dirs_first>, I<icon_dirs_second> and/or I<icon_dirs_last>
+one of I<icon_dirs_first>, I<icon_dirs_second> and/or I<icon_dirs_last>.
 
 =item use_current_theme_icons => 1
 
-Use your current theme icons (from ~/.gtkrc-2.0), even when I<use_only_my_icon_dirs>
+Use your current theme icons (from ~/.gtkrc-2.0), even when I<strict_icon_dirs>
 is set to a true value. This option is useful when you want to get only the icons
-from the current theme. It is usually used in combination with I<use_only_my_icon_dirs>.
-When I<use_only_my_icon_dirs> is set a false value, this option is true by default.
-When I<use_only_my_icon_dirs> is set a true value, this option is false by default.
+from the current theme. It is usually used in combination with I<strict_icon_dirs>.
+When I<strict_icon_dirs> is set a false value, this option is true by default.
+When I<strict_icon_dirs> is set a true value, this option is false by default.
 
 =back
 
@@ -567,28 +577,37 @@ When I<use_only_my_icon_dirs> is set a true value, this option is false by defau
 
 =over 4
 
-=item skip_file_name_re => qr/regex/
+=item skip_filename_re => qr/regex/
 
-Skip .desktop files if their file names will match the regex.
+Skip any desktop file if its file name matches the regex.
 I<NOTE:> File names are from the last slash to the end.
 
-=item skip_app_name_re => qr/regex/
+=item skip_entry  => [{key => 'KeyName', re => qr/REGEX/i}, {...}]
 
-Skip .desktop files based on the value of B<Name>.
+Skip any desktop file if the value from a given key matches the specified regular expression.
+The I<key> can be any valid key from the desktop files.
 
-=item skip_app_command_re => qr/regex/
+Example:
 
-Skip .desktop files based on the value of B<Exec>.
+        skip_entry => [
+            {key => 'Name', re => qr/(?:about|terminal)/i},
+            {key => 'Exec', re => qr/xterm/},
+        ],
 
-=item skip_file_content_re => qr/regex/
+=item substitutions => [{key => 'KeyName', re => qr/REGEX/i, value => 'Value'}, {...}]
 
-Skip .desktop files if the regex matches anywhere in the [Desktop Entry]
-section.
+Substitute, by using a regex, in the values of the desktop files.
+The I<key> can be any valid key from the desktop files.
+The I<re> can be any valid regular expression. Anything matched by the regex, will be
+replaced the string stored in I<value>.
+For global matching/substitution, you need to set the I<global> key to a true value.
 
-=item clean_command_name_re =>  qr/regex/
+Example:
 
-Anything matched by this regex in the values of B<Exec> will be replaced
-with nothing.
+        substitutions => [
+            {key => 'Exec', re => qr/xterm/,    value => 'sakura'},
+            {key => 'Exec', re => qr/\$HOME\b/, value => '/my/home', global => 1},
+        ],
 
 =back
 
@@ -602,32 +621,32 @@ Iterate over desktop files, one file at a time.
 
 =item $obj->get_desktop_files()
 
-Get all desktop files. In list context it returns a list, but in scalar context,
+Get all desktop files. In list context returns a list, but in scalar context,
 it returns an array reference containing the full names of the desktop files.
 
 =item $obj->get_icon_theme_name()
 
-Returns the icon theme name, if any, otherwise it returns an empty string.
+Returns the name of the current icon theme, if any, otherwise returns undef;
 
 =item $obj->get_icon_path("icon_name")
 
-If I<full_icon_paths> is set to a true value, it returns the absolute path of
-a icon name located in the system. If it can't found the icon name, it returns
+If I<abs_icon_paths> is set to a true value, returns the absolute path of an
+icon name located in the system. If it can't find the icon name, it returns
 an empty string.
-If I<full_icon_paths> is set to a false value, it strips the extension name of
+If I<abs_icon_paths> is set to a false value, it strips the extension name of
 the icon (if any), and returns the icon name. If the icon name is undefined, it
 returns an empty string.
 
 =item $obj->parse_desktop_file("filename")
 
-It returns a HASH reference which contains the I<keys_to_keep> and the values
-from the desktop file specified as an argument.
+It returns a HASH reference which contains the I<keys_to_keep> and the corresponding
+values from the given file.
 
 =item $obj->parse_desktop_files()
 
 It returns a HASH reference which categories names as keys, and ARRAY references
 as values which contains HASH references with the keys specified in the I<keys_to_keep>
-option, and values from the .desktop files.
+option, and values from the desktop files.
 
 The returned HASH reference might look something like this:
 
@@ -640,7 +659,7 @@ The returned HASH reference might look something like this:
 
 =head1 AUTHOR
 
-Suteu "Trizen" Daniel, E<lt>trizenx@gmail.comE<gt>
+Daniel "Trizen" Suteu, E<lt>trizenx@gmail.comE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 

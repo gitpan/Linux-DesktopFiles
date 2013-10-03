@@ -17,8 +17,7 @@ BEGIN { use_ok('Linux::DesktopFiles') }
 
 my $obj = Linux::DesktopFiles->new(
                                    keys_to_keep              => [qw(Name GenericName Comment Comment[ro] Terminal Icon Exec)],
-                                   categories                => [qw(Utility Archiving)],
-                                   categories_case_sensitive => 0,
+                                   categories                => [qw(Game Archiving)],
                                   );
 
 my $t_file = 't/file.desktop';
